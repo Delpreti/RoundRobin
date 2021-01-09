@@ -18,7 +18,8 @@ typedef struct {
 typedef struct {
 	processo* p_list;
 	int capacity;
-	int current;
+	int first;
+	int last;
 	void (*fun_ptr)(void); // Ponteiro de funcao
 } estado;
 
@@ -47,8 +48,9 @@ void clean_estados(){
 // Um estado deve ser inicializado com capacidade fixa, sem conter nenhum processo
 estado* new_estado(int capacidade, void (*fun)()){
 	estado* state = malloc(sizeof(estado));
-	state->capacity = capacidade;
-	state->current = 0;
+	state->capacity = capacidade + 1;
+	state->first = 0;
+	state->last = 0;
 	state->p_list = malloc(capacidade * sizeof(processo));
 
 	state->fun_ptr = fun;
@@ -56,41 +58,50 @@ estado* new_estado(int capacidade, void (*fun)()){
 	return state;
 }
 
+int incr_last(estado* state){
+	return (state->last + 1) % state->capacity;
+}
+
+int decr_last(estado* state){
+	return state->last > 0 ? state->last - 1 : state->capacity - 1;
+}
+
+int incr_first(estado* state){
+	return (state->first + 1) % state->capacity;
+}
+
 // Funcao para inserir o processo no estado no final da lista
 // Retorna 0 em caso de sucesso, 1 em caso de falha
 int push_back_processo(estado* state, processo proc){
-	if(state->current < state->capacity){
-		state->p_list[state->current] = proc;
-		state->current++;
-		return 0;
+	if(incr_last(state) == state->first){
+		return 1;
 	}
-	return 1;
+	state->p_list[state->last] = proc;
+	state->last = incr_last(state);
+	return 0;
 }
 
 // Funcao que retorna o primeiro processo de um estado
 processo get_first_processo(estado* state){
-	return state->p_list[0];
+	return state->p_list[state->first];
 }
 
 // Funcao para remover o primeiro processo de um estado
 void rm_first_processo(estado* state){
-	for (int i = 0; i < state->current; i++){
-		state->p_list[i] = state->p_list[i+1];
-	}
-	if(state->current > 0){
-		state->current--;
+	if(state->last != state->first){
+		state->first = incr_first(state);
 	}
 }
 
 // Funcao que retorna o ultimo processo de um estado
 processo get_back_processo(estado* state){
-	return state->p_list[state->current];
+	return state->p_list[state->last - 1];
 }
 
 // Funcao para remover o ultimo processo de um estado
 void rm_back_processo(estado* state){
-	if(state->current > 0){
-		state->current--;
+	if(state->last != state->first){
+		state->last = decr_last(state);
 	}
 }
 
@@ -142,7 +153,7 @@ void faz_nada(){
 }
 
 void executa(){
-	kill(get_back_processo(execucao).pid, SIGCONT);
+	kill(get_first_processo(execucao).pid, SIGCONT);
 }
 
 void encerra(){
@@ -151,7 +162,7 @@ void encerra(){
 }
 
 int busy(){
-	return (execucao->current > 0) ? 1 : 0;
+	return (execucao->last == incr_first(execucao)) ? 1 : 0;
 }
 
 int main(int argc, char** argv){
