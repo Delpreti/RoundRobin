@@ -10,11 +10,11 @@
 typedef processo heap_elem_t;
 
 typedef struct st_heap_t {
-    // Total de memória alocada para elementos
+	// Total de memória alocada para elementos
 	uint32_t size;
-    // Quantidade de elementos
+	// Quantidade de elementos
 	uint32_t count;
-    // Elementos
+	// Elementos
 	heap_elem_t *data;
 } heap_t;
 

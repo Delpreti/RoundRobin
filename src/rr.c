@@ -155,7 +155,7 @@ int main(int argc, char** argv){
 
 	clean_estados();
 
-    return 0;
+	return 0;
 }
 
 // Definir entradas: processos a serem executados (e suas respectivas prioridades), numero de filas (feedback),
