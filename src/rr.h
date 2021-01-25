@@ -12,12 +12,4 @@ typedef struct {
 	int priority; // Quanto menor, mais prioridade
 } processo;
 
-// Um estado contem uma (geralmente) ou mais filas
-typedef struct {
-	fila** f_list;
-	int f_count;
-	void (*fun_ptr)(void); // Ponteiro de funcao
-} estado;
-
-
 #endif

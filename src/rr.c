@@ -14,6 +14,14 @@
 
 extern processo nulo;
 
+// Um estado contem uma (geralmente) ou mais filas
+typedef struct {
+	fila** f_list;
+	int f_count;
+	void (*fun_ptr)(void); // Ponteiro de funcao
+	int f_high;// Variavel que define qual a fila de alta prioridade
+} estado;
+
 // Mantemos uma lista de estados, para liberar memoria apos a execucao do simulador
 // Todo estado deve ser adicionado a essa lista quando criado
 estado* estados[5]; // deixa 5 por enquanto
@@ -40,6 +48,7 @@ void clean_estados(){
 // Inicializa um estado
 estado* new_estado(int capacidade, void (*fun)(), int quant_filas){
 	estado* state = malloc(sizeof(estado));
+	state->f_high = 0;
 	state->f_count = quant_filas;
 	state->f_list = malloc(quant_filas * sizeof(fila*));
 	for(int i = 0; i < quant_filas; i++){
@@ -50,40 +59,49 @@ estado* new_estado(int capacidade, void (*fun)(), int quant_filas){
 	return state;
 }
 
-fila* get_active_fila(estado *state){
-	for(int i = 0; i < state->f_count; i++){
-		if(!is_empty(state->f_list[i])){
-			return state->f_list[i];
-		}
-	}
-	return state->f_list[0]; // retorna a primeira por padrao mesmo que esteja vazia
-}
-
-// Funcao para inserir o processo no estado correto (revisar)
-// Retorna 0 em caso de sucesso, 1 em caso de falha
-int insert_proc(estado *state, processo proc){
-	return push_back_processo(state->f_list[proc.priority], proc);
-}
-
-// Funcao generica que movimenta o proximo processo do estado A para o estado B (revisar)
-void change_estado(estado* leave, estado* enter){
-	if(move_processo(get_active_fila(leave), get_active_fila(enter)) == 0){
-		// Cada estado tem uma funcao propria a ser chamada quando um processo novo eh adicionado
-		enter->fun_ptr();
-	}
-}
-
 estado* inicial;
 estado* pronto;
 // estado* suspenso; // Aguardando operacao de I/O
 estado* execucao;
 estado* finalizado;
 
+fila* get_enter_fila(estado *state, processo proc){
+	return state == pronto ? state->f_list[proc.priority] : state->f_list[state->f_high];
+}
+
+fila* get_leave_fila(estado *state){
+	return state->f_list[state->f_high]; // retorna sempre a fila de alta prioridade
+}
+
+// Funcao generica que movimenta um processo
+// Retorna 0 em caso de sucesso, 1 em caso de falha
+int move_processo_2(fila* leave, estado* enter){
+	processo proc = get_first_processo(leave);
+	if(push_back_processo(get_enter_fila(enter, proc), proc) == 0){
+		rm_first_processo(leave);
+		return 0;
+	}
+	return 1;
+}
+
+// Funcao generica que movimenta o proximo processo do estado A para o estado B (revisar)
+void change_estado(estado* leave, estado* enter){
+	fila* fila_out = get_leave_fila(leave);
+	if(is_empty(fila_out)){
+		leave->f_high = (leave->f_high + 1) % leave->f_count; // recuperacao de prioridade no feedback
+		// Aumentar tambem a prioridade dos processos suspensos !!!
+	}
+	if(move_processo_2(get_leave_fila(leave), enter) == 0){
+		// Cada estado tem uma funcao propria a ser chamada quando um processo novo eh adicionado
+		enter->fun_ptr();
+	}
+}
+
 // Funcao para criacao de um novo processo
 // Nao precisa retornar o processo criado, pois todo processo vai direto para o estado inicial
 void new_processo(char* nome, char* parametros){
 	processo proc;
-	proc.priority = 0; // Processo possui alta prioridade quando criado
+	proc.priority = pronto->f_high; // Processo possui alta prioridade quando criado
 	proc.pid = fork();
 	if(proc.pid > 0){
 		kill(proc.pid, SIGTSTP); // Pausa o processo filho
@@ -140,7 +158,7 @@ void initialize(){
 int main(int argc, char** argv){
 
 	initialize();
-	// Puxar uma thread
+	// Puxar uma thread (?)
 
 	new_processo("teste", "4"); // Criar mais processos de teste
 
