@@ -17,6 +17,7 @@ extern processo nulo;
 
 // Um estado contem uma (geralmente) ou mais filas
 typedef struct {
+	char* nome;
 	fila** f_list;
 	int f_count;
 	void (*fun_ptr)(void); // Ponteiro de funcao
@@ -47,9 +48,10 @@ void clean_estados(){
 }
 
 // Inicializa um estado
-estado* new_estado(int capacidade, void (*fun)(), int quant_filas){
+estado* new_estado(char* name, int capacidade, void (*fun)(), int quant_filas){
 	estado* state = malloc(sizeof(estado));
 	state->f_high = 0;
+	state->nome = name;
 	state->f_count = quant_filas;
 	state->f_list = malloc(quant_filas * sizeof(fila*));
 	for(int i = 0; i < quant_filas; i++){
@@ -80,6 +82,7 @@ int move_processo_2(fila* leave, estado* enter){
 	processo proc = get_first_processo(leave);
 	if(push_back_processo(get_enter_fila(enter, proc), proc) == 0){
 		rm_first_processo(leave);
+		printf("[HH:MM:SS] O processo %d mudou de estado: %s\n", proc.pid, enter->nome);
 		return 0;
 	}
 	return 1;
@@ -121,10 +124,10 @@ void new_processo(char* nome, char* parametros){
 	}
 }
 
-// Quando um processo terminar a execucao, ele ira sinalizar
+// Quando um processo terminar a execucao, (ou apenas pausar) ele ira sinalizar
 void handle_child(int sinal){
 	int status;
-	waitpid(0, &status, WNOHANG | WUNTRACED);
+	waitpid(0, &status, WNOHANG);
 	if(WIFEXITED(status)){
 		change_estado(execucao, finalizado); // Essa operacao nao pode falhar, senao da ruim
 	}
@@ -135,25 +138,34 @@ void faz_nada(){
 }
 
 void chegada(){
-	pid_t procpid = get_back_processo(pronto->f_list[pronto->f_high]).pid;
-	printf("O processo %d chegou na fila de prontos\n", procpid);
+	
 }
 
 void executa(){
 	pid_t procpid = get_first_processo(execucao->f_list[0]).pid;
-	printf("O processo %d esta em execucao\n", procpid);
 	kill(procpid, SIGCONT);
 }
 
 void encerra(){
 	// por enquanto nao precisa fazer nada, o processo fica parado na lista de finalizados
 	// vai sair no final quando o programa chamar a limpeza
-	pid_t procpid = get_first_processo(finalizado->f_list[0]).pid;
-	printf("O processo %d esta sendo finalizado\n", procpid);
 }
 
 int busy(){
-	return (execucao->f_list[0]->last == incr_first(execucao->f_list[0])) ? 1 : 0;
+	return get_back_processo(execucao->f_list[0]).priority != nulo.priority;
+}
+
+int userflag(char* flag){
+	if(strcmp("-f", flag) == 0){
+		return 0;
+	}
+	if(strcmp("-p1", flag) == 0){
+		return 1;
+	}
+	if(strcmp("-p2", flag) == 0){
+		return 2;
+	}
+	return -1;
 }
 
 void initialize(){
@@ -163,31 +175,68 @@ void initialize(){
 
 	srand(time(0)); // Seed para geracao de tempos de I/O aleatorios
 
-	inicial = new_estado(30, faz_nada, 1);
-	pronto = new_estado(50, chegada, 1); // Aumentar numero de filas (feedback)
+	inicial = new_estado("Inicial", 30, faz_nada, 1);
+	pronto = new_estado("Pronto", 50, chegada, 1); // Aumentar numero de filas (feedback)
 	// suspenso = new_estado(50); // Aguardando operacao de I/O
-	execucao = new_estado(1, executa, 1);
-	finalizado = new_estado(30, encerra, 1);
+	execucao = new_estado("Execucao", 1, executa, 1);
+	finalizado = new_estado("Finalizado", 30, encerra, 1);
 }
 
 int main(int argc, char** argv){
 
+	int timeout_time = 0;
+	int quant_p1 = 1;
+	int quant_p2 = 0;
+	int i;
+
+	void testflag(int f){
+		switch(f){
+			case 0:
+				i++;
+				timeout_time = strtol(argv[i], NULL, 10);
+				break;
+			case 1:
+				i++;
+				quant_p1 = strtol(argv[i], NULL, 10);
+				break;
+			case 2:
+				i++;
+				quant_p2 = strtol(argv[i], NULL, 10);
+				break;
+			default:
+				// nao faz nada
+				break;
+		}
+	}
+
+	// pegar flags passadas pelo usuario no argv
+	for(i = 0; i < argc; i++){
+		testflag(userflag(argv[i]));
+	}
+
 	initialize();
 	// Puxar uma thread (?)
 
-	new_processo("teste", "4"); // Criar mais processos de teste
+	for(i = 0; i < quant_p1; i++){
+		// Spawnar processos de tipo 1
+		new_processo("teste", "4");
+	}
 
-	// Colocar dentro de um loop, para ficar
-	// sempre tentando colocar algum processo em execucao
-	change_estado(pronto, execucao);
+	for(i = 0; i < quant_p2; i++){
+		// Spawnar processos de tipo 2
+		new_processo("teste", "10");
+	}
 
-	int pid = get_back_processo(execucao->f_list[0]).pid;
-	int status;
-	while(busy()){}
-	waitpid(pid, &status, 0);
+	// Loop para executar cada processo em sequencia
+	for(int k = quant_p1 + quant_p2; k > 0; k--){
+		change_estado(pronto, execucao);
 
-	change_estado(execucao, finalizado);
-
+		int pid = get_back_processo(execucao->f_list[0]).pid;
+		int status;
+		while(busy()){}
+		waitpid(pid, &status, WUNTRACED);
+	}
+	
 	clean_estados();
 
 	return 0;
@@ -201,5 +250,4 @@ int main(int argc, char** argv){
 
 // Em execucao: Jogar processo na thread
 // Timeout: Tirar processo da thread e jogar pro final da fila, chamar o proximo da fila
-
 

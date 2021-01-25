@@ -53,6 +53,7 @@ processo get_first_processo(fila* queue){
 
 // Funcao para remover o primeiro processo de uma fila
 void rm_first_processo(fila* queue){
+	queue->p_list[queue->first] = nulo;
 	if(!is_empty(queue)){
 		queue->first = incr_first(queue);
 	}
