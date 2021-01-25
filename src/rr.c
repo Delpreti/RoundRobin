@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <threads.h>
 #include <time.h>
+#include <signal.h>
 
 #include "heap.h"
 #include "queue.h"
@@ -104,12 +105,11 @@ void new_processo(char* nome, char* parametros){
 	proc.priority = pronto->f_high; // Processo possui alta prioridade quando criado
 	proc.pid = fork();
 	if(proc.pid > 0){
-		kill(proc.pid, SIGTSTP); // Pausa o processo filho
 		push_back_processo(inicial->f_list[0], proc);
 		// ACHO que nesse ponto o processo ja esta inicializado e ok, entao ja vou mandar pra fila de pronto
 		change_estado(inicial, pronto);
 	} else if(proc.pid == 0){
-		sleep(1); // Garantir que o pai ira executar corretamente a pausa no processo filho
+		raise(SIGTSTP);
 		// Quando o filho voltar, vai voltar daqui
 		int check;	
 		check = execl(nome, nome, parametros, (char *)NULL); // Deve ter que alterar isso eventualmente
@@ -123,20 +123,33 @@ void new_processo(char* nome, char* parametros){
 
 // Quando um processo terminar a execucao, ele ira sinalizar
 void handle_child(int sinal){
-	change_estado(execucao, finalizado); // Essa operacao nao pode falhar, senao da ruim
+	int status;
+	waitpid(0, &status, WNOHANG | WUNTRACED);
+	if(WIFEXITED(status)){
+		change_estado(execucao, finalizado); // Essa operacao nao pode falhar, senao da ruim
+	}
 }
 
 void faz_nada(){
 	// literalmente
 }
 
+void chegada(){
+	pid_t procpid = get_back_processo(pronto->f_list[pronto->f_high]).pid;
+	printf("O processo %d chegou na fila de prontos\n", procpid);
+}
+
 void executa(){
-	kill(get_first_processo(execucao->f_list[0]).pid, SIGCONT);
+	pid_t procpid = get_first_processo(execucao->f_list[0]).pid;
+	printf("O processo %d esta em execucao\n", procpid);
+	kill(procpid, SIGCONT);
 }
 
 void encerra(){
 	// por enquanto nao precisa fazer nada, o processo fica parado na lista de finalizados
 	// vai sair no final quando o programa chamar a limpeza
+	pid_t procpid = get_first_processo(finalizado->f_list[0]).pid;
+	printf("O processo %d esta sendo finalizado\n", procpid);
 }
 
 int busy(){
@@ -148,8 +161,10 @@ void initialize(){
 
 	signal(SIGCHLD, handle_child);
 
+	srand(time(0)); // Seed para geracao de tempos de I/O aleatorios
+
 	inicial = new_estado(30, faz_nada, 1);
-	pronto = new_estado(50, faz_nada, 1); // Aumentar numero de filas (feedback)
+	pronto = new_estado(50, chegada, 1); // Aumentar numero de filas (feedback)
 	// suspenso = new_estado(50); // Aguardando operacao de I/O
 	execucao = new_estado(1, executa, 1);
 	finalizado = new_estado(30, encerra, 1);
@@ -170,6 +185,8 @@ int main(int argc, char** argv){
 	int status;
 	while(busy()){}
 	waitpid(pid, &status, 0);
+
+	change_estado(execucao, finalizado);
 
 	clean_estados();
 
