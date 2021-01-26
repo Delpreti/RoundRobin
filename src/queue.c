@@ -61,7 +61,7 @@ void rm_first_processo(fila* queue){
 
 // Funcao que retorna o ultimo processo de uma fila
 processo get_back_processo(fila* queue){
-	return is_empty(queue) ? nulo : queue->p_list[queue->last - 1];
+	return is_empty(queue) ? nulo : queue->p_list[decr_last(queue)];
 }
 
 // Funcao para remover o ultimo processo de uma fila

@@ -82,7 +82,12 @@ int move_processo_2(fila* leave, estado* enter){
 	processo proc = get_first_processo(leave);
 	if(push_back_processo(get_enter_fila(enter, proc), proc) == 0){
 		rm_first_processo(leave);
-		printf("[HH:MM:SS] O processo %d mudou de estado: %s\n", proc.pid, enter->nome);
+		time_t momento = time(NULL);
+		char* momento_format = strtok(ctime(&momento), " ");
+		momento_format = strtok(NULL, " ");
+		momento_format = strtok(NULL, " ");
+		momento_format = strtok(NULL, " ");
+		printf("[%s] O processo %d mudou de estado: %s\n", momento_format, proc.pid, enter->nome);
 		return 0;
 	}
 	return 1;
@@ -127,8 +132,10 @@ void new_processo(char* nome, char* parametros){
 // Quando um processo terminar a execucao, (ou apenas pausar) ele ira sinalizar
 void handle_child(int sinal){
 	int status;
-	waitpid(0, &status, WNOHANG);
-	if(WIFEXITED(status)){
+	int quem = waitpid(0, &status, WNOHANG | WUNTRACED);
+	//printf("Sinalizou: %d\n", quem);
+	if(quem != 0 && WIFEXITED(status)){
+		//printf("e entrou\n");
 		change_estado(execucao, finalizado); // Essa operacao nao pode falhar, senao da ruim
 	}
 }
@@ -173,7 +180,7 @@ void initialize(){
 
 	signal(SIGCHLD, handle_child);
 
-	srand(time(0)); // Seed para geracao de tempos de I/O aleatorios
+	srand(time(NULL)); // Seed para geracao de tempos de I/O aleatorios
 
 	inicial = new_estado("Inicial", 30, faz_nada, 1);
 	pronto = new_estado("Pronto", 50, chegada, 1); // Aumentar numero de filas (feedback)
@@ -227,14 +234,32 @@ int main(int argc, char** argv){
 		new_processo("teste", "10");
 	}
 
-	// Loop para executar cada processo em sequencia
-	for(int k = quant_p1 + quant_p2; k > 0; k--){
-		change_estado(pronto, execucao);
+	clock_t start;
+	processo p_atual;
+	int status;
 
-		int pid = get_back_processo(execucao->f_list[0]).pid;
-		int status;
-		while(busy()){}
-		waitpid(pid, &status, WUNTRACED);
+	int processa(){
+		while(busy()){
+			// tenho a impressao que esse if deve virar um cnd_timedwait()
+			if(timeout_time > 0 && (clock() - start) / CLOCKS_PER_SEC >= timeout_time){
+				kill(p_atual.pid, SIGTSTP);
+				printf("Tempo limite de CPU excedido para o processo %d\n", p_atual.pid);
+				p_atual.priority = (p_atual.priority + 1) % pronto->f_count;
+				change_estado(execucao, pronto);
+				return 1;
+			}
+		}
+		return 0;
+	}
+
+	// Loop para executar os processos ate acabar
+	while(!is_empty(get_leave_fila(pronto))){
+		change_estado(pronto, execucao);
+		start = clock();
+		p_atual = get_back_processo(execucao->f_list[0]);
+		if(processa() == 0){
+			waitpid(p_atual.pid, &status, 0);
+		}
 	}
 	
 	clean_estados();
