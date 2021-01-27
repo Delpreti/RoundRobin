@@ -8,12 +8,37 @@
 #include <threads.h>
 #include <time.h>
 #include <signal.h>
+#include <pthread.h>
 
 #include "heap.h"
 #include "queue.h"
 #include "rr.h"
 
+#define TIMEOUT_MULTIPLIER_IO 0.1
+
 extern processo nulo;
+pthread_t io_thread;
+heap_t io_heap;
+
+// Clocks que demoram para cada tipo de IO
+// 0 = DISCO		1s
+// 1 = FITA			2s
+// 2 = IMPRESSORA	5s
+unsigned long long io_time[3] = {1000000, 2000000, 5000000 };
+
+// Fila de prioridade para qual o processo vai depois do IO (1 baixa, 0 alta)
+int io_fila[3] = {1, 0, 0};
+
+char *get_io_name(int type){
+	switch(type){
+		case 0: return "Disco";
+		case 1: return "Fita";
+		case 2: return "Impressora";
+		default: return "";
+	}
+}
+
+clock_t io_time_control;
 
 // Um estado contem uma (geralmente) ou mais filas
 typedef struct {
@@ -64,7 +89,7 @@ estado* new_estado(char* name, int capacidade, void (*fun)(), int quant_filas){
 
 estado* inicial;
 estado* pronto;
-// estado* suspenso; // Aguardando operacao de I/O
+estado* suspenso; // Aguardando operacao de I/O
 estado* execucao;
 estado* finalizado;
 
@@ -76,17 +101,22 @@ fila* get_leave_fila(estado *state){
 	return state->f_list[state->f_high]; // retorna sempre a fila de alta prioridade
 }
 
+char *get_time(){
+	time_t momento = time(NULL);
+	char* momento_format = strtok(ctime(&momento), " ");
+	momento_format = strtok(NULL, " ");
+	momento_format = strtok(NULL, " ");
+	momento_format = strtok(NULL, " ");
+	return momento_format;
+}
+
 // Funcao generica que movimenta um processo
 // Retorna 0 em caso de sucesso, 1 em caso de falha
 int move_processo_2(fila* leave, estado* enter){
 	processo proc = get_first_processo(leave);
 	if(push_back_processo(get_enter_fila(enter, proc), proc) == 0){
 		rm_first_processo(leave);
-		time_t momento = time(NULL);
-		char* momento_format = strtok(ctime(&momento), " ");
-		momento_format = strtok(NULL, " ");
-		momento_format = strtok(NULL, " ");
-		momento_format = strtok(NULL, " ");
+		char* momento_format = get_time();
 		printf("[%s] O processo %d mudou de estado: %s\n", momento_format, proc.pid, enter->nome);
 		return 0;
 	}
@@ -102,6 +132,17 @@ void change_estado(estado* leave, estado* enter){
 	}
 	if(move_processo_2(get_leave_fila(leave), enter) == 0){
 		// Cada estado tem uma funcao propria a ser chamada quando um processo novo eh adicionado
+		enter->fun_ptr();
+	}
+}
+
+void io_change_estado(estado *enter){
+	heap_elem_t t = heap_pop(&io_heap);
+	processo proc = t.proc;
+	proc.priority = io_fila[t.io_type];
+	if(push_back_processo(get_enter_fila(enter, proc), proc) == 0){
+		char *momento_format = get_time();
+		printf("[%s] O processo %d mudou de estado: %s\n", momento_format, proc.pid, enter->nome);
 		enter->fun_ptr();
 	}
 }
@@ -140,6 +181,16 @@ void handle_child(int sinal){
 	}
 }
 
+void prepare_io(){
+	processo proc = get_first_processo(suspenso->f_list[0]);
+	heap_elem_t t;
+	t.proc = proc;
+	t.io_type = rand()%3;
+	t.io_end = io_time_control+io_time[t.io_type];
+	heap_push(&io_heap, t);
+	rm_first_processo(get_leave_fila(suspenso));
+}
+
 void faz_nada(){
 	// literalmente
 }
@@ -175,16 +226,26 @@ int userflag(char* flag){
 	return -1;
 }
 
+void *io_check(){
+	while(1){
+		if(io_heap.count > 0 && io_time_control >= heap_front(&io_heap).io_end)
+			io_change_estado(pronto);
+		io_time_control = clock();
+	}
+	return NULL;
+}
+
 void initialize(){
 	nulo.priority = -1;
 
 	signal(SIGCHLD, handle_child);
 
 	srand(time(NULL)); // Seed para geracao de tempos de I/O aleatorios
+	heap_init(&io_heap);
 
 	inicial = new_estado("Inicial", 30, faz_nada, 1);
-	pronto = new_estado("Pronto", 50, chegada, 1); // Aumentar numero de filas (feedback)
-	// suspenso = new_estado(50); // Aguardando operacao de I/O
+	pronto = new_estado("Pronto", 50, chegada, 2); // Aumentar numero de filas (feedback)
+	suspenso = new_estado("Suspenso (I/O)", 50, prepare_io, 1); // Aguardando operacao de I/O
 	execucao = new_estado("Execucao", 1, executa, 1);
 	finalizado = new_estado("Finalizado", 30, encerra, 1);
 }
@@ -223,6 +284,7 @@ int main(int argc, char** argv){
 
 	initialize();
 	// Puxar uma thread (?)
+	pthread_create(&io_thread, NULL, io_check, NULL);
 
 	for(i = 0; i < quant_p1; i++){
 		// Spawnar processos de tipo 1
@@ -239,21 +301,33 @@ int main(int argc, char** argv){
 	int status;
 
 	int processa(){
+		double tick = 1;
 		while(busy()){
+			double elap = clock() - start;
+			double elapsed_time = elap/CLOCKS_PER_SEC;
 			// tenho a impressao que esse if deve virar um cnd_timedwait()
-			if(timeout_time > 0 && (clock() - start) / CLOCKS_PER_SEC >= timeout_time){
+			if(timeout_time > 0 && elapsed_time >= timeout_time){
 				kill(p_atual.pid, SIGTSTP);
 				printf("Tempo limite de CPU excedido para o processo %d\n", p_atual.pid);
 				p_atual.priority = (p_atual.priority + 1) % pronto->f_count;
 				change_estado(execucao, pronto);
 				return 1;
 			}
+			// aqui coloca um I/O aleatório
+			if( elapsed_time >= tick*(timeout_time*TIMEOUT_MULTIPLIER_IO) ){
+				if( rand()%10 == 0 ){
+					kill(p_atual.pid, SIGTSTP);
+					change_estado(execucao, suspenso);
+					return 1;
+				}
+				++tick;
+			}
 		}
 		return 0;
 	}
 
 	// Loop para executar os processos ate acabar
-	while(!is_empty(get_leave_fila(pronto))){
+	while(!is_empty(get_leave_fila(pronto)) || io_heap.count > 0){
 		change_estado(pronto, execucao);
 		start = clock();
 		p_atual = get_back_processo(execucao->f_list[0]);
@@ -261,7 +335,7 @@ int main(int argc, char** argv){
 			waitpid(p_atual.pid, &status, 0);
 		}
 	}
-	
+	pthread_cancel(io_thread);
 	clean_estados();
 
 	return 0;

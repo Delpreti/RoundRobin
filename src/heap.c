@@ -6,7 +6,7 @@
 static const uint32_t BASE_SIZE = 32;
 
 static inline int comparator( heap_elem_t lhs, heap_elem_t rhs ){
-	return lhs.priority >= rhs.priority;
+	return lhs.io_end <= rhs.io_end;
 }
 
 // Inicializa a estrutura da heap

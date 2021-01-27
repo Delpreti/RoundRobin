@@ -2,12 +2,19 @@
 #define __HEAP_ROUND_ROBIN_H
 
 #include <stdint.h>
+#include <time.h>
 #include "rr.h"
 
 #define heap_front(h) (*(h)->data)
 #define heap_free(h) (free((h)->data)), ((h)->data = (void*)0)
 
-typedef processo heap_elem_t;
+typedef struct _processo_ext{
+	processo proc;
+	int io_type;
+	clock_t io_end;
+}processo_ext;
+
+typedef processo_ext heap_elem_t;
 
 typedef struct st_heap_t {
 	// Total de memória alocada para elementos
