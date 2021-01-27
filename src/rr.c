@@ -313,7 +313,7 @@ int main(int argc, char** argv){
 				change_estado(execucao, pronto);
 				return 1;
 			}
-			// aqui coloca um I/O aleatório
+			// aqui coloca um I/O aleatório, se precisar remover o IO só comentar esse if
 			if( elapsed_time >= tick*(timeout_time*TIMEOUT_MULTIPLIER_IO) ){
 				if( rand()%10 == 0 ){
 					kill(p_atual.pid, SIGTSTP);
