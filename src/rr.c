@@ -10,24 +10,24 @@
 #include <signal.h>
 #include <pthread.h>
 
-#include "heap.h"
 #include "queue.h"
 #include "rr.h"
 
 #define TIMEOUT_MULTIPLIER_IO 0.1
 
 extern processo nulo;
+
+#define IO_DEVICE_COUNT 3
 pthread_t io_thread;
-heap_t io_heap;
 
 // Clocks que demoram para cada tipo de IO
 // 0 = DISCO		1s
 // 1 = FITA			2s
 // 2 = IMPRESSORA	5s
-long io_time[3] = {1000000, 2000000, 5000000 };
+long io_time[IO_DEVICE_COUNT] = {1, 2, 5};
 
 // Fila de prioridade para qual o processo vai depois do IO (1 baixa, 0 alta)
-int io_fila[3] = {1, 0, 0};
+int io_fila[IO_DEVICE_COUNT] = {1, 0, 0};
 
 char *get_io_name(int type){
 	switch(type){
@@ -136,16 +136,20 @@ void change_estado(estado* leave, estado* enter){
 	}
 }
 
-void io_change_estado(estado *enter){
-	heap_elem_t t = heap_pop(&io_heap);
-	processo proc = t.proc;
-	proc.priority = io_fila[t.io_type]%enter->f_count;
-	if(push_back_processo(get_enter_fila(enter, proc), proc) == 0){
+void io_change_estado(estado *enter, int type){
+	fila *leave = get_leave_fila(suspenso);
+	processo proc = get_first_processo(leave);
+	proc.priority = io_fila[type]%enter->f_count;
+	if(is_empty(leave)){
+		suspenso->f_high = (suspenso->f_high + 1)%suspenso->f_count; // recuperacao de prioridade no feedback
+		// Aumentar tambem a prioridade dos processos suspensos !!!
+	}
+	if(move_processo_2(leave, enter) == 0){
+		rm_first_processo(leave);
 		char *momento_format = get_time();
 		printf("[%s] O processo %d mudou de estado: %s\n", momento_format, proc.pid, enter->nome);
 		enter->fun_ptr();
 	}
-	rm_first_processo(get_leave_fila(suspenso));
 }
 
 // Funcao para criacao de um novo processo
@@ -183,13 +187,7 @@ void handle_child(int sinal){
 }
 
 void prepare_io(){
-	processo proc = get_first_processo(suspenso->f_list[0]);
-	heap_elem_t t;
-	t.proc = proc;
-	t.io_type = rand()%3;
-	t.io_end = clock()+io_time[t.io_type];
-	heap_push(&io_heap, t);
-	printf("Processo %d vai executar o IO %s e vai terminar em %ld segundos.\n", proc.pid, get_io_name(t.io_type), io_time[t.io_type]/CLOCKS_PER_SEC);
+
 }
 
 void faz_nada(){
@@ -229,9 +227,15 @@ int userflag(char* flag){
 
 void *io_check(){
 	while(1){
-		if(io_heap.count > 0 && io_time_control >= heap_front(&io_heap).io_end)
-			io_change_estado(pronto);
-		io_time_control = clock();
+		if( !is_empty(get_leave_fila(suspenso)) ){
+			int type = rand()%IO_DEVICE_COUNT;
+			pid_t procpid = get_first_processo(execucao->f_list[0]).pid;
+			if( procpid == 0 ) continue;
+			printf("Processo %d vai executar o IO %s (%ld segundos).\n", procpid, get_io_name(type), io_time[type]);
+			// Simulação do tempo de IO
+			sleep(io_time[type]);
+			io_change_estado(pronto, type);
+		}
 	}
 	return NULL;
 }
@@ -242,7 +246,6 @@ void initialize(){
 	signal(SIGCHLD, handle_child);
 
 	srand(time(NULL)); // Seed para geracao de tempos de I/O aleatorios
-	heap_init(&io_heap);
 
 	inicial = new_estado("Inicial", 30, faz_nada, 1);
 	pronto = new_estado("Pronto", 50, chegada, 2); // Aumentar numero de filas (feedback)
@@ -338,7 +341,6 @@ int main(int argc, char** argv){
 			}
 		}
 	}
-	printf("%d %d\n", is_empty(get_leave_fila(pronto)), is_empty(get_leave_fila(suspenso)));
 	pthread_cancel(io_thread);
 	clean_estados();
 
