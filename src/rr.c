@@ -146,8 +146,6 @@ void io_change_estado(estado *enter, int type){
 	}
 	if(move_processo_2(leave, enter) == 0){
 		rm_first_processo(leave);
-		char *momento_format = get_time();
-		printf("[%s] O processo %d mudou de estado: %s\n", momento_format, proc.pid, enter->nome);
 		enter->fun_ptr();
 	}
 }
@@ -229,7 +227,7 @@ void *io_check(){
 	while(1){
 		if( !is_empty(get_leave_fila(suspenso)) ){
 			int type = rand()%IO_DEVICE_COUNT;
-			pid_t procpid = get_first_processo(execucao->f_list[0]).pid;
+			pid_t procpid = get_first_processo(suspenso->f_list[0]).pid;
 			if( procpid == 0 ) continue;
 			printf("Processo %d vai executar o IO %s (%ld segundos).\n", procpid, get_io_name(type), io_time[type]);
 			// Simulação do tempo de IO
