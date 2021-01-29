@@ -10,6 +10,10 @@
 typedef struct {
 	pid_t pid;
 	int priority; // Quanto menor, mais prioridade
+	double arrive_time;
+	int* io_times;
+	int* io_types;
+	int io_count;
 } processo;
 
 #endif
