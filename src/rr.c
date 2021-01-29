@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <stdbool.h>
@@ -14,11 +15,12 @@
 #include "rr.h"
 
 #define TIMEOUT_MULTIPLIER_IO 0.1
-
+#define MAX_JOBS 100
+#define BINARY_TO_EXECUTE "teste"
 extern processo nulo;
 
 #define IO_DEVICE_COUNT 3
-pthread_t io_thread;
+pthread_t io_thread, job_thread;
 
 // Clocks que demoram para cada tipo de IO
 // 0 = DISCO		1s
@@ -38,7 +40,11 @@ char *get_io_name(int type){
 	}
 }
 
-clock_t io_time_control;
+struct _job{
+	int start_time;
+	char duration[11];
+}jobs[MAX_JOBS];
+int job_idx, total_jobs;
 
 // Um estado contem uma (geralmente) ou mais filas
 typedef struct {
@@ -112,8 +118,9 @@ char *get_time(){
 
 // Funcao generica que movimenta um processo
 // Retorna 0 em caso de sucesso, 1 em caso de falha
-int move_processo_2(fila* leave, estado* enter){
+int move_processo_2(fila* leave, estado* enter, int priority){
 	processo proc = get_first_processo(leave);
+	if(priority != -1) proc.priority = priority;
 	if(push_back_processo(get_enter_fila(enter, proc), proc) == 0){
 		rm_first_processo(leave);
 		char* momento_format = get_time();
@@ -130,7 +137,7 @@ void change_estado(estado* leave, estado* enter){
 		leave->f_high = (leave->f_high + 1) % leave->f_count; // recuperacao de prioridade no feedback
 		// Aumentar tambem a prioridade dos processos suspensos !!!
 	}
-	if(move_processo_2(get_leave_fila(leave), enter) == 0){
+	if(move_processo_2(get_leave_fila(leave), enter, -1) == 0){
 		// Cada estado tem uma funcao propria a ser chamada quando um processo novo eh adicionado
 		enter->fun_ptr();
 	}
@@ -138,13 +145,11 @@ void change_estado(estado* leave, estado* enter){
 
 void io_change_estado(estado *enter, int type){
 	fila *leave = get_leave_fila(suspenso);
-	processo proc = get_first_processo(leave);
-	proc.priority = io_fila[type]%enter->f_count;
 	if(is_empty(leave)){
 		suspenso->f_high = (suspenso->f_high + 1)%suspenso->f_count; // recuperacao de prioridade no feedback
 		// Aumentar tambem a prioridade dos processos suspensos !!!
 	}
-	if(move_processo_2(leave, enter) == 0){
+	if(move_processo_2(leave, enter, io_fila[type]%enter->f_count) == 0){
 		rm_first_processo(leave);
 		enter->fun_ptr();
 	}
@@ -252,12 +257,32 @@ void initialize(){
 	finalizado = new_estado("Finalizado", 30, encerra, 1);
 }
 
+int schedule_cmp(const void * a, const void * b){
+	struct _job *A = (struct _job *)a;
+	struct _job *B = (struct _job *)b;
+	return (B->start_time - A->start_time);
+}
+
+void *schedule(){
+	struct timeval start, last;
+	gettimeofday(&start, NULL);
+	while(job_idx < total_jobs){
+		if( (last.tv_sec - start.tv_sec) >= jobs[job_idx].start_time ){
+			new_processo(BINARY_TO_EXECUTE, jobs[job_idx].duration);
+			++job_idx;
+		}
+		gettimeofday(&last, NULL);
+	}
+	return NULL;
+}
+
 int main(int argc, char** argv){
 
 	int timeout_time = 0;
 	int quant_p1 = 1;
 	int quant_p2 = 0;
 	int i;
+	FILE *config_file = NULL;
 
 	void testflag(int f){
 		switch(f){
@@ -274,7 +299,10 @@ int main(int argc, char** argv){
 				quant_p2 = strtol(argv[i], NULL, 10);
 				break;
 			default:
-				// nao faz nada
+				// abre arquivo com configuração dos processos, ta um pouco bugado (ele não imprime nada dos processos, também não sei se é só isso).
+				// inicio duracao
+				// ++i;
+				// config_file = fopen(argv[i], "r");
 				break;
 		}
 	}
@@ -288,14 +316,26 @@ int main(int argc, char** argv){
 	// Puxar uma thread (?)
 	pthread_create(&io_thread, NULL, io_check, NULL);
 
-	for(i = 0; i < quant_p1; i++){
-		// Spawnar processos de tipo 1
-		new_processo("teste", "4");
-	}
+	if(config_file){
+		int inicio;
+		char duracao[11];
+		while(fscanf(config_file, " %d %s", &inicio, duracao) != EOF){
+			jobs[total_jobs].start_time = inicio;
+			strncpy(jobs[total_jobs].duration, duracao, 11);
+			++total_jobs;
+		}
+		qsort(jobs, total_jobs, sizeof(struct _job), schedule_cmp);
+		pthread_create(&job_thread, NULL, schedule, NULL);
+	}else{
+		for(i = 0; i < quant_p1; i++){
+			// Spawnar processos de tipo 1
+			new_processo(BINARY_TO_EXECUTE, "4");
+		}
 
-	for(i = 0; i < quant_p2; i++){
-		// Spawnar processos de tipo 2
-		new_processo("teste", "10");
+		for(i = 0; i < quant_p2; i++){
+			// Spawnar processos de tipo 2
+			new_processo(BINARY_TO_EXECUTE, "10");
+		}
 	}
 
 	clock_t start;
@@ -329,7 +369,7 @@ int main(int argc, char** argv){
 	}
 
 	// Loop para executar os processos ate acabar
-	while(!is_empty(get_leave_fila(pronto)) || !is_empty(get_leave_fila(suspenso))){
+	while(!is_empty(get_leave_fila(pronto)) || !is_empty(get_leave_fila(suspenso)) || job_idx != total_jobs){
 		if( !is_empty(get_leave_fila(pronto)) ){
 			change_estado(pronto, execucao);
 			start = clock();
@@ -341,6 +381,10 @@ int main(int argc, char** argv){
 	}
 	pthread_cancel(io_thread);
 	clean_estados();
+	if(config_file) {
+		fclose(config_file);
+		pthread_cancel(job_thread);
+	}
 
 	return 0;
 }
