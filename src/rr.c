@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -10,12 +11,15 @@
 #include <time.h>
 #include <signal.h>
 #include <pthread.h>
+
 #include <semaphore.h>
 
-#include "heap.h"
 #include "queue.h"
 #include "rr.h"
 
+#define TIMEOUT_MULTIPLIER_IO 0.1
+#define MAX_JOBS 100
+#define BINARY_TO_EXECUTE "teste"
 extern processo nulo;
 
 #define MAX_JOBS 100
@@ -125,6 +129,7 @@ estado* new_estado(char* name, int capacidade, void (*fun)(), int quant_filas){
 
 estado* inicial;
 estado* pronto;
+
 estado* suspenso_disco;
 estado* suspenso_fita;
 estado* suspenso_impressora;
@@ -150,8 +155,9 @@ char *get_time(){
 
 // Funcao generica que movimenta um processo
 // Retorna 0 em caso de sucesso, 1 em caso de falha
-int move_processo_2(fila* leave, estado* enter){
+int move_processo_2(fila* leave, estado* enter, int priority){
 	processo proc = get_first_processo(leave);
+	if(priority != -1) proc.priority = priority;
 	if(push_back_processo(get_enter_fila(enter, proc), proc) == 0){
 		rm_first_processo(leave);
 		char* momento_format = get_time();
@@ -185,6 +191,18 @@ void change_estado(estado* leave, estado* enter){
 		sem_wait(&semaforo);
 	}
 	pthread_mutex_unlock(&lock);
+}
+
+void io_change_estado(estado *enter, int type){
+	fila *leave = get_leave_fila(suspenso);
+	if(is_empty(leave)){
+		suspenso->f_high = (suspenso->f_high + 1)%suspenso->f_count; // recuperacao de prioridade no feedback
+		// Aumentar tambem a prioridade dos processos suspensos !!!
+	}
+	if(move_processo_2(leave, enter, io_fila[type]%enter->f_count) == 0){
+		rm_first_processo(leave);
+		enter->fun_ptr();
+	}
 }
 
 // Funcao para criacao de um novo processo
@@ -232,6 +250,7 @@ void handle_child(int sinal){
 		change_estado(execucao, finalizado); // Essa operacao nao pode falhar, senao da ruim
 	}
 }
+
 
 #define not_empty(state) !is_empty(get_leave_fila(state))
 
@@ -303,6 +322,21 @@ int userflag(char* flag){
 	return -1;
 }
 
+void *io_check(){
+	while(1){
+		if( !is_empty(get_leave_fila(suspenso)) ){
+			int type = rand()%IO_DEVICE_COUNT;
+			pid_t procpid = get_first_processo(suspenso->f_list[0]).pid;
+			if( procpid == 0 ) continue;
+			printf("Processo %d vai executar o IO %s (%ld segundos).\n", procpid, get_io_name(type), io_time[type]);
+			// Simulação do tempo de IO
+			sleep(io_time[type]);
+			io_change_estado(pronto, type);
+		}
+	}
+	return NULL;
+}
+
 void initialize(){
 	nulo.priority = -1;
 
@@ -349,9 +383,7 @@ int main(int argc, char** argv){
 	int quant_p1 = 1;
 	int quant_p2 = 0;
 	int i;
-	FILE* config_file;
-
-	config_file = fopen("passagem.txt","r");
+	FILE *config_file = NULL;
 
 	void testflag(int f){
 		switch(f){
@@ -396,11 +428,12 @@ int main(int argc, char** argv){
 		}
 		qsort(jobs, total_jobs, sizeof(struct _job), schedule_cmp);
 		pthread_create(&job_thread, NULL, schedule, NULL);
-	} else{
+	} else {
 		for(i = 0; i < quant_p1; i++){
 			// Spawnar processos de tipo 1
 			new_processo(BINARY_TO_EXECUTE, "4");
 		}
+
 		for(i = 0; i < quant_p2; i++){
 			// Spawnar processos de tipo 2
 			new_processo(BINARY_TO_EXECUTE, "10");
@@ -412,11 +445,12 @@ int main(int argc, char** argv){
 	int status;
 
 	int processa(){
+		double tick = 1;
 		while(busy()){
+      double elap = clock() - start;
+			double elapsed_time = elap/CLOCKS_PER_SEC;
 			int elapsed_seconds = (clock() - start) / CLOCKS_PER_SEC;
 			if(timeout_time > 0){
-				
-				// tenho a impressao que esse if deve virar um cnd_timedwait()
 				if( elapsed_seconds >= timeout_time ){
 					kill(p_atual.pid, SIGTSTP);
 					printf("Tempo limite de CPU excedido para o processo %d\n", p_atual.pid);
@@ -444,13 +478,26 @@ int main(int argc, char** argv){
 				p_atual.priority = (p_atual.priority + io_fila[io_num - 2]) % pronto->f_count;
 				change_estado(execucao, estados[io_num]);
 				return 1;
+			}
+      
+    --- Versao anterior ---
+
+			}
+			// aqui coloca um I/O aleatório, se precisar remover o IO só comentar esse if
+			if( elapsed_time >= tick*(timeout_time*TIMEOUT_MULTIPLIER_IO) ){
+				if( rand()%10 == 0 ){
+					kill(p_atual.pid, SIGTSTP);
+					change_estado(execucao, suspenso);
+					return 1;
+				}
+				++tick;
 			}*/
 		}
 		return 0;
 	}
 
 	// Loop para executar os processos ate acabar
-	while(not_empty(pronto) || not_empty(suspenso_disco) || not_empty(suspenso_fita) || not_empty(suspenso_impressora)){
+	while(not_empty(pronto) || not_empty(suspenso_disco) || not_empty(suspenso_fita) || not_empty(suspenso_impressora) || job_idx != total_jobs){
 		if(is_empty(get_leave_fila(pronto))){
 			continue;
 		}
