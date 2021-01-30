@@ -11,15 +11,13 @@
 #include <time.h>
 #include <signal.h>
 #include <pthread.h>
-
 #include <semaphore.h>
 
 #include "queue.h"
 #include "rr.h"
 
 #define TIMEOUT_MULTIPLIER_IO 0.1
-#define MAX_JOBS 100
-#define BINARY_TO_EXECUTE "teste"
+
 extern processo nulo;
 
 #define MAX_JOBS 100
@@ -129,7 +127,6 @@ estado* new_estado(char* name, int capacidade, void (*fun)(), int quant_filas){
 
 estado* inicial;
 estado* pronto;
-
 estado* suspenso_disco;
 estado* suspenso_fita;
 estado* suspenso_impressora;
@@ -155,9 +152,9 @@ char *get_time(){
 
 // Funcao generica que movimenta um processo
 // Retorna 0 em caso de sucesso, 1 em caso de falha
-int move_processo_2(fila* leave, estado* enter, int priority){
+int move_processo_2(fila* leave, estado* enter){
 	processo proc = get_first_processo(leave);
-	if(priority != -1) proc.priority = priority;
+	//if(priority != -1) proc.priority = priority;
 	if(push_back_processo(get_enter_fila(enter, proc), proc) == 0){
 		rm_first_processo(leave);
 		char* momento_format = get_time();
@@ -191,18 +188,6 @@ void change_estado(estado* leave, estado* enter){
 		sem_wait(&semaforo);
 	}
 	pthread_mutex_unlock(&lock);
-}
-
-void io_change_estado(estado *enter, int type){
-	fila *leave = get_leave_fila(suspenso);
-	if(is_empty(leave)){
-		suspenso->f_high = (suspenso->f_high + 1)%suspenso->f_count; // recuperacao de prioridade no feedback
-		// Aumentar tambem a prioridade dos processos suspensos !!!
-	}
-	if(move_processo_2(leave, enter, io_fila[type]%enter->f_count) == 0){
-		rm_first_processo(leave);
-		enter->fun_ptr();
-	}
 }
 
 // Funcao para criacao de um novo processo
@@ -320,21 +305,6 @@ int userflag(char* flag){
 		return 3;
 	}
 	return -1;
-}
-
-void *io_check(){
-	while(1){
-		if( !is_empty(get_leave_fila(suspenso)) ){
-			int type = rand()%IO_DEVICE_COUNT;
-			pid_t procpid = get_first_processo(suspenso->f_list[0]).pid;
-			if( procpid == 0 ) continue;
-			printf("Processo %d vai executar o IO %s (%ld segundos).\n", procpid, get_io_name(type), io_time[type]);
-			// Simulação do tempo de IO
-			sleep(io_time[type]);
-			io_change_estado(pronto, type);
-		}
-	}
-	return NULL;
 }
 
 void initialize(){
