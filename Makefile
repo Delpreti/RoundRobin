@@ -1,6 +1,6 @@
 LDFLAGS = 
 CFLAGS = -Wall
-LIBFLAGS = -lpthread
+LIBFLAGS = -lpthread -lrt
 CC = gcc
 CFILES := $(shell find src/ -name '*.c' | sed -e 's/\.c/\.o/' | sed -e 's/src/obj/')
 OBJS = ${CFILES}

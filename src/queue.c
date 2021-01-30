@@ -15,6 +15,7 @@ fila* new_fila(int capacidade){
 	return queue;
 }
 
+/*
 int incr_last(fila* queue){
 	return (queue->last + 1) % queue->capacity;
 }
@@ -33,6 +34,17 @@ bool is_empty(fila* queue){
 
 bool is_full(fila* queue){
 	return incr_last(queue) == queue->first;
+}
+*/
+
+void clear_fila(fila* queue){
+	if( !is_empty(queue) ){
+		for(int i = queue->first; i != decr_last(queue); i = (i + 1) % queue->capacity){
+			free(queue->p_list[i].io_times);
+			free(queue->p_list[i].io_types);
+		}
+	}
+	free(queue->p_list);
 }
 
 // Funcao para inserir o processo no final da fila
@@ -79,4 +91,15 @@ int move_processo(fila* leave, fila* enter){
 		return 0;
 	}
 	return 1;
+}
+
+void incr_priorities(fila* queue, int f_count){
+	if(is_empty(queue)){
+		return;
+	}
+	for(int i = queue->first; i != decr_last(queue); i = (i + 1) % queue->capacity){
+		if(queue->p_list[i].priority != -1){
+			queue->p_list[i].priority = (queue->p_list[i].priority + 1) % f_count;
+		}
+	}
 }
