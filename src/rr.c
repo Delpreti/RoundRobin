@@ -3,6 +3,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <stdbool.h>
 #include <threads.h>
@@ -17,7 +18,12 @@
 
 extern processo nulo;
 
+#define MAX_JOBS 100
+#define BINARY_TO_EXECUTE "teste"
+
 #define IO_DEVICE_COUNT 3
+
+pthread_t job_thread;
 
 // Um estado contem uma (geralmente) ou mais filas
 typedef struct {
@@ -29,6 +35,12 @@ typedef struct {
 	pthread_t fun_thread; // Cada estado opera separadamente, com a propria thread
 	int enabler;
 } estado;
+
+struct _job{
+	int start_time;
+	char duration[11];
+}jobs[MAX_JOBS];
+int job_idx, total_jobs;
 
 pthread_mutex_t lock;
 sem_t semaforo;
@@ -194,8 +206,8 @@ void new_processo(char* nome, char* parametros){
 	proc.pid = fork();
 	if(proc.pid > 0){
 		push_back_processo(inicial->f_list[0], proc);
-		// ACHO que nesse ponto o processo ja esta inicializado e ok, entao ja vou mandar pra fila de pronto
-		proc.arrive_time = clock();
+		// Nesse ponto o processo ja vai para a fila de pronto
+		proc.arrive_time = time(NULL);
 		change_estado(inicial, pronto);
 	} else if(proc.pid == 0){
 		raise(SIGTSTP);
@@ -269,9 +281,8 @@ void encerra(){
 	// vai sair no final quando o programa chamar a limpeza
 
 	// Imprimir turnaround do processo
-	double turn = clock() - get_back_processo(finalizado->f_list[0]).arrive_time;
-	double turnaround = turn / CLOCKS_PER_SEC;
-	printf("Turnaround do processo %d : %.2lf\n", get_back_processo(finalizado->f_list[0]).pid, turnaround);
+	int turnaround = time(NULL) - get_back_processo(finalizado->f_list[0]).arrive_time;
+	printf("Turnaround do processo %d : %ds\n", get_back_processo(finalizado->f_list[0]).pid, turnaround);
 }
 
 #define busy() get_back_processo(execucao->f_list[0]).priority != nulo.priority
@@ -311,6 +322,25 @@ void initialize(){
 
 	execucao = new_estado("Execucao", 1, executa, 1);
 	finalizado = new_estado("Finalizado", 30, encerra, 1);
+}
+
+int schedule_cmp(const void * a, const void * b){
+	struct _job *A = (struct _job *)a;
+	struct _job *B = (struct _job *)b;
+	return (B->start_time - A->start_time);
+}
+
+void *schedule(void* useless_arg){
+	struct timeval start, last;
+	gettimeofday(&start, NULL);
+	while(job_idx < total_jobs){
+		if( (last.tv_sec - start.tv_sec) >= jobs[job_idx].start_time ){
+			new_processo(BINARY_TO_EXECUTE, jobs[job_idx].duration);
+			++job_idx;
+		}
+		gettimeofday(&last, NULL);
+	}
+	return NULL;
 }
 
 int main(int argc, char** argv){
@@ -356,14 +386,25 @@ int main(int argc, char** argv){
 
 	initialize();
 
-	for(i = 0; i < quant_p1; i++){
-		// Spawnar processos de tipo 1
-		new_processo("teste", "4");
-	}
-
-	for(i = 0; i < quant_p2; i++){
-		// Spawnar processos de tipo 2
-		new_processo("teste", "10");
+	if(config_file){
+		int inicio;
+		char duracao[11];
+		while(fscanf(config_file, " %d %s", &inicio, duracao) != EOF){
+			jobs[total_jobs].start_time = inicio;
+			strncpy(jobs[total_jobs].duration, duracao, 11);
+			++total_jobs;
+		}
+		qsort(jobs, total_jobs, sizeof(struct _job), schedule_cmp);
+		pthread_create(&job_thread, NULL, schedule, NULL);
+	} else{
+		for(i = 0; i < quant_p1; i++){
+			// Spawnar processos de tipo 1
+			new_processo(BINARY_TO_EXECUTE, "4");
+		}
+		for(i = 0; i < quant_p2; i++){
+			// Spawnar processos de tipo 2
+			new_processo(BINARY_TO_EXECUTE, "10");
+		}
 	}
 
 	clock_t start;
@@ -372,12 +413,11 @@ int main(int argc, char** argv){
 
 	int processa(){
 		while(busy()){
-			double elap = clock() - start;
-			double elapsed_time = elap / CLOCKS_PER_SEC;
+			int elapsed_seconds = (clock() - start) / CLOCKS_PER_SEC;
 			if(timeout_time > 0){
 				
 				// tenho a impressao que esse if deve virar um cnd_timedwait()
-				if( elapsed_time >= timeout_time ){
+				if( elapsed_seconds >= timeout_time ){
 					kill(p_atual.pid, SIGTSTP);
 					printf("Tempo limite de CPU excedido para o processo %d\n", p_atual.pid);
 					p_atual.priority = (p_atual.priority + 1) % pronto->f_count;
@@ -385,10 +425,9 @@ int main(int argc, char** argv){
 					return 1;
 				}
 			}
-			int elap_int = elapsed_time;
 			// Se precisar remover o IO, basta comentar esse for
 			for(i = 0; i < p_atual.io_count; i++){
-				if( elap_int == p_atual.io_times[i] ){
+				if( elapsed_seconds == p_atual.io_times[i] ){
 					p_atual.io_times[i] = -1;
 					kill(p_atual.pid, SIGTSTP);
 					printf("O processo %d solicitou I/O de %s\n", p_atual.pid, get_io_name(p_atual.io_types[i]) );
@@ -428,6 +467,7 @@ int main(int argc, char** argv){
 	pthread_mutex_destroy(&lock);
 	if(config_file != NULL){
 		fclose(config_file);
+		pthread_cancel(job_thread);
 	}
 
 	return 0;
