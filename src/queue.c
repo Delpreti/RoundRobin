@@ -3,7 +3,7 @@
 #include "queue.h"
 #include "rr.h"
 
-processo nulo;
+processo* nulo;
 
 // Uma fila deve ser inicializada com capacidade fixa, sem conter nenhum processo
 fila* new_fila(int capacidade){
@@ -11,37 +11,20 @@ fila* new_fila(int capacidade){
 	queue->capacity = capacidade + 1;
 	queue->first = 0;
 	queue->last = 0;
-	queue->p_list = malloc(capacidade * sizeof(processo));
+	queue->p_list = malloc(capacidade * sizeof(processo*));
 	return queue;
 }
 
-/*
-int incr_last(fila* queue){
-	return (queue->last + 1) % queue->capacity;
+void clear_processo(processo* proc){
+	free(proc->io_times);
+	free(proc->io_types);
 }
-
-int decr_last(fila* queue){
-	return queue->last > 0 ? queue->last - 1 : queue->capacity - 1;
-}
-
-int incr_first(fila* queue){
-	return (queue->first + 1) % queue->capacity;
-}
-
-bool is_empty(fila* queue){
-	return queue->first == queue->last;
-}
-
-bool is_full(fila* queue){
-	return incr_last(queue) == queue->first;
-}
-*/
 
 void clear_fila(fila* queue){
 	if( !is_empty(queue) ){
 		for(int i = queue->first; i != decr_last(queue); i = (i + 1) % queue->capacity){
-			free(queue->p_list[i].io_times);
-			free(queue->p_list[i].io_types);
+			clear_processo(queue->p_list[i]);
+			free(queue->p_list[i]);
 		}
 	}
 	free(queue->p_list);
@@ -49,8 +32,8 @@ void clear_fila(fila* queue){
 
 // Funcao para inserir o processo no final da fila
 // Retorna 0 em caso de sucesso, 1 em caso de falha
-int push_back_processo(fila* queue, processo proc){
-	if(is_full(queue) || (proc.priority == nulo.priority) ){
+int push_back_processo(fila* queue, processo* proc){
+	if(is_full(queue) || (proc->priority == nulo->priority) ){
 		return 1;
 	}
 	queue->p_list[queue->last] = proc;
@@ -59,7 +42,7 @@ int push_back_processo(fila* queue, processo proc){
 }
 
 // Funcao que retorna o primeiro processo de uma fila
-processo get_first_processo(fila* queue){
+processo* get_first_processo(fila* queue){
 	return is_empty(queue) ? nulo : queue->p_list[queue->first];
 }
 
@@ -72,7 +55,7 @@ void rm_first_processo(fila* queue){
 }
 
 // Funcao que retorna o ultimo processo de uma fila
-processo get_back_processo(fila* queue){
+processo* get_back_processo(fila* queue){
 	return is_empty(queue) ? nulo : queue->p_list[decr_last(queue)];
 }
 
@@ -98,8 +81,8 @@ void incr_priorities(fila* queue, int f_count){
 		return;
 	}
 	for(int i = queue->first; i != decr_last(queue); i = (i + 1) % queue->capacity){
-		if(queue->p_list[i].priority != -1){
-			queue->p_list[i].priority = (queue->p_list[i].priority + 1) % f_count;
+		if(queue->p_list[i]->priority != -1){
+			queue->p_list[i]->priority = (queue->p_list[i]->priority + 1) % f_count;
 		}
 	}
 }

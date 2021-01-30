@@ -18,7 +18,7 @@
 
 #define TIMEOUT_MULTIPLIER_IO 0.1
 
-extern processo nulo;
+extern processo* nulo;
 
 #define MAX_JOBS 100
 #define BINARY_TO_EXECUTE "teste"
@@ -36,7 +36,16 @@ typedef struct {
 	int f_high; // Variavel que define qual a fila de alta prioridade
 	pthread_t fun_thread; // Cada estado opera separadamente, com a propria thread
 	int enabler;
+	int completed;
 } estado;
+
+estado* inicial;
+estado* pronto;
+estado* suspenso_disco;
+estado* suspenso_fita;
+estado* suspenso_impressora;
+estado* execucao;
+estado* finalizado;
 
 struct _job{
 	int start_time;
@@ -44,7 +53,7 @@ struct _job{
 }jobs[MAX_JOBS];
 int job_idx, total_jobs;
 
-pthread_mutex_t lock;
+pthread_mutex_t lock, weirdlock, weirderlock;
 sem_t semaforo;
 
 // Clocks que demoram para cada tipo de IO
@@ -65,6 +74,8 @@ char *get_io_name(int type){
 	}
 }
 
+void change_estado(estado* leave, estado* enter);
+
 void *enable_fun(void* state_pointer){
 	estado* state = (estado*) state_pointer;
 	while(1){
@@ -73,19 +84,29 @@ void *enable_fun(void* state_pointer){
 		if(state->enabler > 0){
 			state->fun_ptr();
 			state->enabler -= 1;
-			sem_post(&semaforo);
+			// printf("finalizei do %s\n", state->nome);
+			if(state == pronto){
+				sem_post(&semaforo);
+			}
 			//pthread_mutex_unlock(&state->proc_mutex);
+		}
+		if(state->completed > 0){
+			//pthread_mutex_unlock(&lock);
+			change_estado(state, pronto);
+			state->completed--;
 		}
 	}
 	return NULL;
 }
 
-#define gen_io() (rand() % 3) + 2
+// #define gen_io() (rand() % 3) + 2
+#define gen_io() 2
 
 // Mantemos uma lista de estados, para liberar memoria apos a execucao do simulador
 // Todo estado deve ser adicionado a essa lista quando criado
 estado* estados[7];
 int estados_count = 0;
+int p_encerrados;
 
 // Funcao para guardar um estado na lista
 void sub_estado(estado* state){
@@ -112,6 +133,7 @@ estado* new_estado(char* name, int capacidade, void (*fun)(), int quant_filas){
 	estado* state = malloc(sizeof(estado));
 	state->f_high = 0;
 	state->enabler = 0;
+	state->completed = 0;
 	// pthread_mutex_init(&state->proc_mutex, NULL);
 	state->nome = name;
 	state->f_count = quant_filas;
@@ -125,16 +147,8 @@ estado* new_estado(char* name, int capacidade, void (*fun)(), int quant_filas){
 	return state;
 }
 
-estado* inicial;
-estado* pronto;
-estado* suspenso_disco;
-estado* suspenso_fita;
-estado* suspenso_impressora;
-estado* execucao;
-estado* finalizado;
-
-fila* get_enter_fila(estado *state, processo proc){
-	return state == pronto ? state->f_list[proc.priority] : state->f_list[state->f_high];
+fila* get_enter_fila(estado *state, processo* proc){
+	return state == pronto ? state->f_list[proc->priority] : state->f_list[state->f_high];
 }
 
 fila* get_leave_fila(estado *state){
@@ -153,14 +167,17 @@ char *get_time(){
 // Funcao generica que movimenta um processo
 // Retorna 0 em caso de sucesso, 1 em caso de falha
 int move_processo_2(fila* leave, estado* enter){
-	processo proc = get_first_processo(leave);
+	processo* proc = get_first_processo(leave);
 	//if(priority != -1) proc.priority = priority;
+	pthread_mutex_lock(&weirderlock);
 	if(push_back_processo(get_enter_fila(enter, proc), proc) == 0){
 		rm_first_processo(leave);
+		pthread_mutex_unlock(&weirderlock);
 		char* momento_format = get_time();
-		printf("[%s] O processo %d mudou de estado: %s\n", momento_format, proc.pid, enter->nome);
+		printf("[%s] O processo %d mudou de estado: %s\n", momento_format, proc->pid, enter->nome);
 		return 0;
 	}
+	pthread_mutex_unlock(&weirderlock);
 	return 1;
 }
 
@@ -185,7 +202,9 @@ void change_estado(estado* leave, estado* enter){
 	if(move_processo_2(fila_out, enter) == 0){
 		// Cada estado tem uma funcao propria a ser chamada quando um processo novo eh adicionado
 		enter->enabler += 1;
-		sem_wait(&semaforo);
+		if(enter == pronto){
+			sem_wait(&semaforo);
+		}
 	}
 	pthread_mutex_unlock(&lock);
 }
@@ -193,26 +212,26 @@ void change_estado(estado* leave, estado* enter){
 // Funcao para criacao de um novo processo
 // Nao precisa retornar o processo criado, pois todo processo vai direto para o estado inicial
 void new_processo(char* nome, char* parametros){
-	processo proc;
-	proc.priority = pronto->f_high; // Processo possui alta prioridade quando criado
+	processo* proc = malloc(sizeof(processo));
+	proc->priority = pronto->f_high; // Processo possui alta prioridade quando criado
 
-	proc.io_count = rand() % 3; // Um unico processo pode solicitar um maximo de 3 IOs
-	if(proc.io_count > 0){
-		proc.io_times = malloc(proc.io_count * sizeof(int));
-		proc.io_types = malloc(proc.io_count * sizeof(int));
-		for(int i = 0; i < proc.io_count; i++){
-			proc.io_times[i] = rand() % (strtol(parametros, NULL, 10) - 2) + 1;
-			proc.io_types[i] = rand() % 3;
+	proc->io_count = rand() % 3; // Um unico processo pode solicitar um maximo de 3 IOs
+	if(proc->io_count > 0){
+		proc->io_times = malloc(proc->io_count * sizeof(int));
+		proc->io_types = malloc(proc->io_count * sizeof(int));
+		for(int i = 0; i < proc->io_count; i++){
+			proc->io_times[i] = rand() % (strtol(parametros, NULL, 10) - 2) + 1;
+			proc->io_types[i] = rand() % 3;
 		}
 	}
 
-	proc.pid = fork();
-	if(proc.pid > 0){
+	proc->pid = fork();
+	if(proc->pid > 0){
 		push_back_processo(inicial->f_list[0], proc);
 		// Nesse ponto o processo ja vai para a fila de pronto
-		proc.arrive_time = time(NULL);
+		proc->arrive_time = time(NULL);
 		change_estado(inicial, pronto);
-	} else if(proc.pid == 0){
+	} else if(proc->pid == 0){
 		raise(SIGTSTP);
 		// Quando o filho voltar, vai voltar daqui
 		int check;	
@@ -229,15 +248,21 @@ void new_processo(char* nome, char* parametros){
 void handle_child(int sinal){
 	int status;
 	int quem = waitpid(0, &status, WNOHANG | WUNTRACED);
-	//printf("Sinalizou: %d\n", quem);
 	if(quem != 0 && WIFEXITED(status)){
-		//printf("e entrou\n");
 		change_estado(execucao, finalizado); // Essa operacao nao pode falhar, senao da ruim
 	}
 }
 
+#define not_empty(state) (!is_empty(get_leave_fila(state)))
 
-#define not_empty(state) !is_empty(get_leave_fila(state))
+int not_empty_pronto(){
+	for(int i = 0; i < pronto->f_count; i++){
+		if( !is_empty(pronto->f_list[i]) ){
+			return 1; // true
+		}
+	}
+	return 0; // false
+}
 
 void faz_nada(){
 	// literalmente
@@ -247,9 +272,9 @@ void chegada(){
 	// Se o processo chega numa fila com prioridade ruim,
 	// mas nao tem ninguem na fila prioritaria
 	if( is_empty(get_leave_fila(pronto)) ){
-		pthread_mutex_lock(&lock);
+		//pthread_mutex_lock(&lock);
 		adjust_priority(pronto);
-		pthread_mutex_unlock(&lock);
+		//pthread_mutex_unlock(&lock);
 	}
 }
 
@@ -257,9 +282,7 @@ void chegada(){
 void exec_io(estado* state, int time){
 	if(not_empty(state)){
 		sleep(time);
-		pthread_mutex_unlock(&lock);
-		change_estado(state, pronto);
-		pthread_mutex_lock(&lock);
+		state->completed++;
 	}
 }
 
@@ -276,20 +299,20 @@ void exec_impressora(){
 }
 
 void executa(){
-	pid_t procpid = get_first_processo(execucao->f_list[0]).pid;
+	pid_t procpid = get_first_processo(execucao->f_list[0])->pid;
 	kill(procpid, SIGCONT);
 }
 
 void encerra(){
-	// por enquanto nao precisa fazer nada, o processo fica parado na lista de finalizados
-	// vai sair no final quando o programa chamar a limpeza
-
+	processo* proc = get_back_processo(finalizado->f_list[0]);
 	// Imprimir turnaround do processo
-	int turnaround = time(NULL) - get_back_processo(finalizado->f_list[0]).arrive_time;
-	printf("Turnaround do processo %d : %ds\n", get_back_processo(finalizado->f_list[0]).pid, turnaround);
+	int turnaround = time(NULL) - proc->arrive_time;
+	printf("Turnaround do processo %d : %ds\n", proc->pid, turnaround);
+
+	p_encerrados++;
 }
 
-#define busy() get_back_processo(execucao->f_list[0]).priority != nulo.priority
+#define busy() ( get_back_processo(execucao->f_list[0])->priority != nulo->priority )
 
 int userflag(char* flag){
 	if(strcmp("-t", flag) == 0){
@@ -308,16 +331,20 @@ int userflag(char* flag){
 }
 
 void initialize(){
-	nulo.priority = -1;
+	nulo = malloc(sizeof(processo));
+	nulo->priority = -1;
 
 	signal(SIGCHLD, handle_child);
 
 	srand(time(NULL)); // Seed para geracao de tempos de I/O aleatorios
 
 	pthread_mutex_init(&lock, NULL);
+	pthread_mutex_init(&weirdlock, NULL);
+	pthread_mutex_init(&weirderlock, NULL);
 	sem_init(&semaforo, 0, 0);
 
 	inicial = new_estado("Inicial", 30, faz_nada, 1);
+
 	pronto = new_estado("Pronto", 50, chegada, 2);
 
 	suspenso_disco = new_estado("Suspenso / Disco", 15, exec_disco, 1);
@@ -326,6 +353,8 @@ void initialize(){
 
 	execucao = new_estado("Execucao", 1, executa, 1);
 	finalizado = new_estado("Finalizado", 30, encerra, 1);
+
+	p_encerrados = 0;
 }
 
 int schedule_cmp(const void * a, const void * b){
@@ -410,72 +439,49 @@ int main(int argc, char** argv){
 		}
 	}
 
-	clock_t start;
-	processo p_atual;
+	time_t start;
+	processo* p_atual;
 	int status;
 
 	int processa(){
-		double tick = 1;
 		while(busy()){
-      double elap = clock() - start;
-			double elapsed_time = elap/CLOCKS_PER_SEC;
-			int elapsed_seconds = (clock() - start) / CLOCKS_PER_SEC;
+			int elapsed_time = time(NULL) - start;
 			if(timeout_time > 0){
-				if( elapsed_seconds >= timeout_time ){
-					kill(p_atual.pid, SIGTSTP);
-					printf("Tempo limite de CPU excedido para o processo %d\n", p_atual.pid);
-					p_atual.priority = (p_atual.priority + 1) % pronto->f_count;
+				if( elapsed_time >= timeout_time ){
+					kill(p_atual->pid, SIGTSTP);
+					printf("Tempo limite de CPU (%ds) excedido para o processo %d\n", elapsed_time, p_atual->pid);
+					p_atual->priority = (p_atual->priority + 1) % pronto->f_count;
 					change_estado(execucao, pronto);
 					return 1;
 				}
 			}
 			// Se precisar remover o IO, basta comentar esse for
-			for(i = 0; i < p_atual.io_count; i++){
-				if( elapsed_seconds == p_atual.io_times[i] ){
-					p_atual.io_times[i] = -1;
-					kill(p_atual.pid, SIGTSTP);
-					printf("O processo %d solicitou I/O de %s\n", p_atual.pid, get_io_name(p_atual.io_types[i]) );
-					p_atual.priority = (p_atual.priority + io_fila[p_atual.io_types[i]]) % pronto->f_count;
-					change_estado(execucao, estados[ p_atual.io_types[i] + 2 ]);
+			for(i = 0; i < p_atual->io_count; i++){
+				if( elapsed_time == p_atual->io_times[i] ){
+					pthread_mutex_lock(&weirdlock);
+					p_atual->io_times[i] = -1;
+					kill(p_atual->pid, SIGTSTP);
+					printf("O processo %d solicitou I/O de %s\n", p_atual->pid, get_io_name(p_atual->io_types[i]) );
+					p_atual->priority = (p_atual->priority + io_fila[p_atual->io_types[i]]) % pronto->f_count;
+					change_estado(execucao, estados[ p_atual->io_types[i] + 2 ]);
+					pthread_mutex_unlock(&weirdlock);
 					return 1;
 				}
 			}
-/*			// Se precisar remover o IO, basta comentar esse if
-			if( elap_int == get_io_time(p_atual) ){
-				int io_num = gen_io();
-				kill(p_atual.pid, SIGTSTP);
-				printf("O processo %d solicitou I/O de %s\n", p_atual.pid, get_io_name(io_num));
-				p_atual.priority = (p_atual.priority + io_fila[io_num - 2]) % pronto->f_count;
-				change_estado(execucao, estados[io_num]);
-				return 1;
-			}
-      
-    --- Versao anterior ---
-
-			}
-			// aqui coloca um I/O aleatório, se precisar remover o IO só comentar esse if
-			if( elapsed_time >= tick*(timeout_time*TIMEOUT_MULTIPLIER_IO) ){
-				if( rand()%10 == 0 ){
-					kill(p_atual.pid, SIGTSTP);
-					change_estado(execucao, suspenso);
-					return 1;
-				}
-				++tick;
-			}*/
 		}
 		return 0;
 	}
 
 	// Loop para executar os processos ate acabar
-	while(not_empty(pronto) || not_empty(suspenso_disco) || not_empty(suspenso_fita) || not_empty(suspenso_impressora) || job_idx != total_jobs){
-		if(is_empty(get_leave_fila(pronto))){
+	while( p_encerrados < (quant_p1 + quant_p2) ){
+		if( is_empty(get_leave_fila(pronto)) ){
 			continue;
 		}
 		change_estado(pronto, execucao);
-		start = clock();
+		start = time(NULL);
 		p_atual = get_back_processo(execucao->f_list[0]);
 		if(processa() == 0){
-			waitpid(p_atual.pid, &status, 0);
+			waitpid(p_atual->pid, &status, 0);
 		}
 	}
 	
@@ -486,6 +492,7 @@ int main(int argc, char** argv){
 		fclose(config_file);
 		pthread_cancel(job_thread);
 	}
+	free(nulo);
 
 	return 0;
 }
