@@ -60,7 +60,7 @@ sem_t semaforo;
 // 0 = DISCO		1s
 // 1 = FITA			2s
 // 2 = IMPRESSORA	5s
-int io_time[IO_DEVICE_COUNT] = {1, 2, 5}; // nao usei
+int io_time[IO_DEVICE_COUNT] = {1, 2, 5}; // nao usado
 
 // Fila de prioridade para qual o processo vai depois do IO (1 baixa, 0 alta)
 int io_fila[IO_DEVICE_COUNT] = {1, 0, 0};
@@ -98,9 +98,6 @@ void *enable_fun(void* state_pointer){
 	}
 	return NULL;
 }
-
-// #define gen_io() (rand() % 3) + 2
-#define gen_io() 2
 
 // Mantemos uma lista de estados, para liberar memoria apos a execucao do simulador
 // Todo estado deve ser adicionado a essa lista quando criado
@@ -188,6 +185,8 @@ void adjust_priority(estado* state){
 	incr_priorities(suspenso_disco->f_list[0], pronto->f_count);
 	incr_priorities(suspenso_fita->f_list[0], pronto->f_count);
 	incr_priorities(suspenso_impressora->f_list[0], pronto->f_count);
+
+	incr_priorities(execucao->f_list[0], pronto->f_count); // na teoria precisa tambem
 }
 
 // Funcao generica que movimenta o proximo processo do estado A para o estado B (fazer MUTEX aqui)
@@ -235,7 +234,7 @@ void new_processo(char* nome, char* parametros){
 		raise(SIGTSTP);
 		// Quando o filho voltar, vai voltar daqui
 		int check;	
-		check = execl(nome, nome, parametros, (char *)NULL); // Deve ter que alterar isso eventualmente
+		check = execl(nome, nome, parametros, (char *)NULL);
 		if(check == -1){
 			//printf("Arquivo %s nao encontrado\n", nome);
 			exit(1);
@@ -264,8 +263,28 @@ int not_empty_pronto(){
 	return 0; // false
 }
 
-void faz_nada(){
-	// literalmente
+int quant_p1;
+int quant_p2;
+int atraso;
+
+void inicializacao(){
+	for(int i = 0; i < quant_p1; i++){
+		// Spawnar processos de tipo 1
+		new_processo(BINARY_TO_EXECUTE, "4");
+		// printf("entrei aqui\n");
+		if(atraso > 0){
+			//int conta = time(NULL);
+			sleep(atraso);
+			//printf("Atraso: %d, sleep: %d\n", atraso, (int) time(NULL) - conta);
+		}
+	}
+	for(int i = 0; i < quant_p2; i++){
+		// Spawnar processos de tipo 2
+		new_processo(BINARY_TO_EXECUTE, "10");
+		if(atraso > 0){
+			sleep(atraso);
+		}
+	}
 }
 
 void chegada(){
@@ -308,6 +327,7 @@ void encerra(){
 	// Imprimir turnaround do processo
 	int turnaround = time(NULL) - proc->arrive_time;
 	printf("Turnaround do processo %d : %ds\n", proc->pid, turnaround);
+	// printf("Pedidos de I/O do processo %d : %d\n", proc->pid, proc->io_count);
 
 	p_encerrados++;
 }
@@ -327,12 +347,19 @@ int userflag(char* flag){
 	if(strcmp("-f", flag) == 0){
 		return 3;
 	}
+	if(strcmp("-i", flag) == 0){
+		return 4;
+	}
 	return -1;
 }
 
 void initialize(){
 	nulo = malloc(sizeof(processo));
 	nulo->priority = -1;
+
+	quant_p1 = 1;
+	quant_p2 = 0;
+	atraso = 0;
 
 	signal(SIGCHLD, handle_child);
 
@@ -343,7 +370,7 @@ void initialize(){
 	pthread_mutex_init(&weirderlock, NULL);
 	sem_init(&semaforo, 0, 0);
 
-	inicial = new_estado("Inicial", 30, faz_nada, 1);
+	inicial = new_estado("Inicial", 30, inicializacao, 1);
 
 	pronto = new_estado("Pronto", 50, chegada, 2);
 
@@ -379,8 +406,6 @@ void *schedule(void* useless_arg){
 int main(int argc, char** argv){
 
 	int timeout_time = 0;
-	int quant_p1 = 1;
-	int quant_p2 = 0;
 	int i;
 	FILE *config_file = NULL;
 
@@ -404,18 +429,22 @@ int main(int argc, char** argv){
 				i++;
 				config_file = fopen(argv[i], "r");
 				break;
+			case 4:
+				i++;
+				atraso = strtol(argv[i], NULL, 10);
+				break;
 			default:
 				// deixar sempre vazio, para adicionar mais opcoes basta criar a flag na funcao userflag() e abrir um novo case
 				break;
 		}
 	}
 
+	initialize();
+
 	// pegar flags passadas pelo usuario no argv
 	for(i = 0; i < argc; i++){
 		testflag(userflag(argv[i]));
 	}
-
-	initialize();
 
 	if(config_file){
 		int inicio;
@@ -428,15 +457,7 @@ int main(int argc, char** argv){
 		qsort(jobs, total_jobs, sizeof(struct _job), schedule_cmp);
 		pthread_create(&job_thread, NULL, schedule, NULL);
 	} else {
-		for(i = 0; i < quant_p1; i++){
-			// Spawnar processos de tipo 1
-			new_processo(BINARY_TO_EXECUTE, "4");
-		}
-
-		for(i = 0; i < quant_p2; i++){
-			// Spawnar processos de tipo 2
-			new_processo(BINARY_TO_EXECUTE, "10");
-		}
+		inicial->enabler += 1;
 	}
 
 	time_t start;
@@ -486,12 +507,14 @@ int main(int argc, char** argv){
 	}
 	
 	// Limpeza
+	// printf("double free clean\n");
 	clean_estados();
 	pthread_mutex_destroy(&lock);
 	if(config_file != NULL){
 		fclose(config_file);
 		pthread_cancel(job_thread);
 	}
+	// printf("double free nulo\n");
 	free(nulo);
 
 	return 0;
